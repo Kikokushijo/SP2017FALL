@@ -9,7 +9,7 @@
 int main(){
     char filename[1024] = {};
     read(STDIN_FILENO, filename, 1024);
-    // fprintf(stderr, "READING:%s\n", filename);
+    fprintf(stderr, "READING:%s\n", filename);
 
     if (filename[strlen(filename) - 1] == '\n')
         filename[strlen(filename) - 1] = 0;
@@ -38,5 +38,6 @@ int main(){
         if (read_len == 0) break;
         write(STDOUT_FILENO, buffer, strlen(buffer));
     }
+    sleep(5);
     return 0;
 }

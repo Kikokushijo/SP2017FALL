@@ -4,10 +4,16 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+
+#include <time.h>
 #include <fcntl.h>
+#include <ctype.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 #define TIMEOUT_SEC 5           // timeout in seconds for wait for a connection 
 #define MAXBUFSIZE  1024        // timeout in seconds for wait for a connection 
@@ -68,6 +74,16 @@ static void set_ndelay( int fd );
 
 static void add_to_buf( http_request *reqP, char* str, size_t len );
 
+int isvalid_name(char* str){
+    int len = strlen(str);
+    if (len == 0) return 0;
+    for (int i = 0; i != len; ++i){
+        if (!isalpha(str[i]) && !isdigit(str[i]) && str[i] != '_')
+            return 0;
+    }
+    return 1;
+}
+
 int main( int argc, char** argv ) {
     http_server server;         // http server
     http_request* requestP = NULL;// pointer to http requests from client
@@ -81,10 +97,15 @@ int main( int argc, char** argv ) {
     int err;                    // used by read_header_and_file()
     int i, ret, nwritten;
     
-    int fds[64];
-    for (int i = 0; i != 32; ++i)
-        pipe(fds + 2 * i);
+    char timebuf[100];
+    int buflen;
+    char buf[20000];
 
+    int to_CGI[maxfd][2], from_CGI[maxfd][2];
+    int openedfd[10000] = {}, pipe2conn[10000] = {}, pipe2pid[10000] = {};
+    openedfd[3] = 1;
+
+    time_t now;
 
     // Parse args. 
     if ( argc != 3 ) {
@@ -112,70 +133,191 @@ int main( int argc, char** argv ) {
 
     // Main loop. 
     while (1) {
-        // Wait for a connection.
-        clilen = sizeof(cliaddr);
-        conn_fd = accept( server.listen_fd, (struct sockaddr *) &cliaddr, (socklen_t *) &clilen );
-        if ( conn_fd < 0 ) {
-            if ( errno == EINTR || errno == EAGAIN ) continue; // try again 
-            if ( errno == ENFILE ) {
-                (void) fprintf( stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd );
-                continue;
-            }   
-            ERR_EXIT( "accept" )
+
+        // Select Server or CGI
+        fd_set fdread;
+        FD_ZERO(&fdread);
+        for(int i = 0; i != maxfd; ++i){
+            if (openedfd[i])
+                FD_SET(i, &fdread);
         }
-        requestP[conn_fd].conn_fd = conn_fd;
-        requestP[conn_fd].status = READING;             
-        strcpy( requestP[conn_fd].host, inet_ntoa( cliaddr.sin_addr ) );
-        set_ndelay( conn_fd );
 
-        fprintf( stderr, "getting a new request... fd %d from %s\n", conn_fd, requestP[conn_fd].host );
+        int validfd = 0;
+        struct timeval timeout = {1, 0};
+        if((validfd = select(maxfd, &fdread, NULL, NULL, &timeout)) < 0){
+            printf("%s\n",strerror(errno));
+            return 0;
+        }else if (validfd == 0){
+            continue;
+        }
+        // puts("SELECTING...");
+        if(FD_ISSET(server.listen_fd, &fdread)){
+            clilen = sizeof(cliaddr);
+            conn_fd = accept( server.listen_fd, (struct sockaddr *) &cliaddr, (socklen_t *) &clilen );
+            if ( conn_fd < 0 ) {
+                if ( errno == EINTR || errno == EAGAIN ) continue; // try again 
+                if ( errno == ENFILE ) {
+                    (void) fprintf( stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd );
+                    continue;
+                }   
+                ERR_EXIT( "accept" )
+            }
+            requestP[conn_fd].conn_fd = conn_fd;
+            requestP[conn_fd].status = READING;             
+            strcpy( requestP[conn_fd].host, inet_ntoa( cliaddr.sin_addr ) );
+            set_ndelay( conn_fd );
 
-        while (1) {
-            ret = read_header_and_file( &requestP[conn_fd], &err );
-            if ( ret > 0 ) continue;
-            else if ( ret < 0 ) {
-                // error for reading http header or requested file
-                fprintf( stderr, "error on fd %d, code %d\n", 
-                requestP[conn_fd].conn_fd, err );
-                requestP[conn_fd].status = ERROR;
+            fprintf( stderr, "getting a new request... fd %d from %s\n", conn_fd, requestP[conn_fd].host );
+
+            while (1) {
+                ret = read_header_and_file( &requestP[conn_fd], &err );
+                if ( ret > 0 ) continue;
+                else if ( ret < 0 ) {
+                    // error for reading http header or requested file
+                    fprintf( stderr, "error on fd %d, code %d\n", 
+                    requestP[conn_fd].conn_fd, err );
+                    requestP[conn_fd].status = ERROR;
                     close( requestP[conn_fd].conn_fd );
                     free_request( &requestP[conn_fd] );
-                break;
-            } else if ( ret == 0 ) {
+                    break;
+                } else if ( ret == 0 ) {
 
-                if (fork() == 0){
-                    dup2(fds[0], STDIN_FILENO);
-                    dup2(fds[3], STDOUT_FILENO);
-                    execl(requestP[conn_fd].file, requestP[conn_fd].file, NULL);
+                    // ready for writing
+                    fprintf(stderr, "writing (buf %p, idx %d) %d bytes to request fd %d\n", 
+                            requestP[conn_fd].buf, (int) requestP[conn_fd].buf_idx,
+                            (int) requestP[conn_fd].buf_len, requestP[conn_fd].conn_fd );
+
+                    requestP[conn_fd].buf_len = 0;
+
+                    char buf_query[1024] = {};
+                    sscanf(requestP[conn_fd].query, "filename=%s", buf_query);
+                    if (!isvalid_name(requestP[conn_fd].file) || !isvalid_name(buf_query)){
+                        buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 400 BAD REQUEST\015\012Server: SP TOY\015\012" );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        now = time( (time_t*) 0 );
+                        (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+                        buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        buflen = snprintf( buf, sizeof(buf), "400 BAD REQUEST\015\012\015\012" );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                        fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                        fprintf( stderr, "BAD REQUEST\n");
+                        close( requestP[conn_fd].conn_fd );
+                        free_request( &requestP[conn_fd] );
+                    }
+                    else{
+                        pipe(to_CGI[conn_fd]);
+                        pipe(from_CGI[conn_fd]);
+                        pid_t pid;
+                        
+                        if ((pid = fork()) == 0){
+                            dup2(to_CGI[conn_fd][0], STDIN_FILENO);
+                            dup2(from_CGI[conn_fd][1], STDOUT_FILENO);
+                            // close(to_CGI[conn_fd][1]);
+                            // close(from_CGI[conn_fd][0]);
+                            // close(STDIN_FILENO);
+                            // close(STDOUT_FILENO);
+                            execl(requestP[conn_fd].file, requestP[conn_fd].file, NULL);
+                            exit(3);
+                        }
+                        // close(to_CGI[conn_fd][1]);
+                        // close(from_CGI[conn_fd][0]);
+                        int read_pipe = from_CGI[conn_fd][0];
+                        openedfd[read_pipe] = 1;
+                        pipe2conn[read_pipe] = conn_fd;
+                        pipe2pid[read_pipe] = pid;
+                        write(to_CGI[conn_fd][1], buf_query, strlen(buf_query));
+                        // fprintf(stderr, "PIPING: %d\n", read_pipe);
+                        // fprintf(stderr, "Pipe2conn: %d\n", pipe2conn[read_pipe]);
+                        // fprintf(stderr, "Pipe2pid: %d\n", pipe2pid[read_pipe]);
+                        // puts("FORK FINISH");
+                    }
+                    
+                    // write once only and ignore error
+                    // nwritten = write( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len );
+                    // fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                    // close( requestP[conn_fd].conn_fd );
+                    // free_request( &requestP[conn_fd] );
+                    
+                    break;
                 }
-
-                write(fds[1], requestP[conn_fd].query+9, strlen(requestP[conn_fd].query+9));
-                // fcntl(fds[2], F_SETFL, fcntl(fds[2], F_GETFL) | O_NONBLOCK);
-                while (1) {
-                    char buf[1024] = {};
-                    int buflen = read(fds[2], buf, 128);
-                    add_to_buf( requestP + conn_fd, buf, buflen );
-                    if (buflen < 128) break;
-                }
-                printf("BREAK\n");
-
-                // ready for writing
-                fprintf( stderr, "writing (buf %p, idx %d) %d bytes to request fd %d\n", 
-                requestP[conn_fd].buf, (int) requestP[conn_fd].buf_idx,
-                (int) requestP[conn_fd].buf_len, requestP[conn_fd].conn_fd );
-
-
-
-                // write once only and ignore error
-                // nwritten = write( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len );
-                printf("FD:%d\nCONTENT:\n%s\nLEN:%d\n", (int)requestP[conn_fd].conn_fd, requestP[conn_fd].buf, (int)strlen(requestP[conn_fd].buf) );
-                nwritten = write( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, strlen(requestP[conn_fd].buf) );
-                fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
-                close( requestP[conn_fd].conn_fd );
-                // free_request( &requestP[conn_fd] );
-                break;
             }
+        }else{
+            // fprintf(stderr, "SELECT PIPE\n");
+            int pipe_fd;
+            pid_t pid;
+            for(pipe_fd = 4; pipe_fd != maxfd; ++pipe_fd){
+                // fprintf(stderr, "SELECTED: %d\n", pipe_fd);
+                if (openedfd[pipe_fd] && FD_ISSET(pipe_fd, &fdread) > 0){
+                    conn_fd = pipe2conn[pipe_fd];
+                    pid = pipe2pid[pipe_fd];
+                    break;
+                }
+            }
+            openedfd[pipe_fd] = 0;
+            // fprintf(stderr, "SELECTED: %d\n", pipe_fd);
+
+
+            int status;
+            pid_t ret = waitpid(pid, &status, WNOHANG);
+            // fprintf(stderr, "PID:%d STATUS:%d\nRET:%d\n", (int)pid, (int)status, (int)ret);
+            if (ret < 0){
+                continue;
+            }
+            if (status > 0){
+                requestP[conn_fd].buf_len = 0;
+                buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 404 NOT FOUND\015\012Server: SP TOY\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                now = time( (time_t*) 0 );
+                (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+                buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "404 NOT FOUND\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                fprintf( stderr, "BAD REQUEST\n");
+                close( requestP[conn_fd].conn_fd );
+                free_request( &requestP[conn_fd] );
+            }else{
+                char contbuf[20000] = {};
+                int cont_len = read(pipe_fd, contbuf, 19500);
+                // fprintf(stderr, "%s\n", buf);
+                requestP[conn_fd].buf_len = 0;
+                buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 200 OK\015\012Server: SP TOY\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                now = time( (time_t*) 0 );
+                (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+                buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Content-Length: %d\015\012", cont_len );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "%s\015\012\015\012", contbuf );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                // fprintf( stderr, "%s\n", contbuf);
+                close( requestP[conn_fd].conn_fd );
+                free_request( &requestP[conn_fd] );
+            }
+
+
+            // puts("FINISH PIPE");
+
+
         }
+
+        // puts("FINISH SELECT");
+
+        // Wait for a connection.
+            
     }
     free( requestP );
     return 0;
@@ -256,6 +398,7 @@ static int read_header_and_file( http_request* reqP, int *errP ) {
         if ( strstr( reqP->buf, "\015\012\015\012" ) != (char*) 0 ||
              strstr( reqP->buf, "\012\012" ) != (char*) 0 ) break;
     }
+    // fprintf( stderr, "header: %s\n", reqP->buf );
 
     // Parse the first line of the request.
     method_str = get_request_line( reqP );
@@ -286,7 +429,42 @@ static int read_header_and_file( http_request* reqP, int *errP ) {
           
     strcpy( reqP->file, file );
     strcpy( reqP->query, query );
-    reqP->buf_len = 0;
+
+    /*
+    if ( query[0] == (char) 0 ) {
+        // for file request, read it in buf
+        r = stat( reqP->file, &sb );
+        if ( r < 0 ) ERR_RET( 6 )
+
+        fd = open( reqP->file, O_RDONLY );
+        if ( fd < 0 ) ERR_RET( 7 )
+
+        reqP->buf_len = 0;
+
+        buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 200 OK\015\012Server: SP TOY\015\012" );
+        add_to_buf( reqP, buf, buflen );
+        now = time( (time_t*) 0 );
+        (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+        buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+        add_to_buf( reqP, buf, buflen );
+        buflen = snprintf(
+            buf, sizeof(buf), "Content-Length: %ld\015\012", (int64_t) sb.st_size );
+        add_to_buf( reqP, buf, buflen );
+        buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+        add_to_buf( reqP, buf, buflen );
+
+        ptr = mmap( 0, (size_t) sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0 );
+        if ( ptr == (void*) -1 ) ERR_RET( 8 )
+        add_to_buf( reqP, ptr, sb.st_size );
+        (void) munmap( ptr, sb.st_size );
+        close( fd );
+        // printf( "%s\n", reqP->buf );
+        // fflush( stdout );
+        reqP->buf_idx = 0; // writing from offset 0
+        return 0;
+    }
+    */
+
     return 0;
 }
 
