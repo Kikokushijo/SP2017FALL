@@ -45,8 +45,8 @@ typedef struct {
 } http_request;
 
 typedef struct {
-    char c_time_string[100];
-} TimeInfo;
+    char string[500];
+} Info;
 
 static char* logfilenameP;      // log file name
 int info_flag = 0;
@@ -81,7 +81,7 @@ static void set_ndelay( int fd );
 static void add_to_buf( http_request *reqP, char* str, size_t len );
 
 void info_handler(int signo){
-    fprintf(stderr, "INFO!!!\n");
+    // fprintf(stderr, "INFO!!!\n");
     info_flag = 1;
     return;
 }
@@ -206,7 +206,7 @@ int main( int argc, char** argv ) {
                     char buf_query[1024] = {};
                     sscanf(requestP[conn_fd].query, "filename=%s", buf_query);
                     if (strcmp(requestP[conn_fd].file, "info") == 0 && strlen(buf_query) < 5) {
-                        fprintf(stderr, "INFO\n");
+                        // fprintf(stderr, "INFO\n");
                         if (fork() == 0) {
                             // fprintf(stderr, "INFO\n");
                             // signal(SIGUSR1, infoHandler);
@@ -215,24 +215,41 @@ int main( int argc, char** argv ) {
                             exit(0);
                         }
                         while(!info_flag);
-                        fprintf(stderr, "INFO START %d\n", died);
+                        // fprintf(stderr, "INFO START %d\n", died);
                         buflen = snprintf( buf, sizeof(buf), "%d processes died previously.\015\012", died );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
                         int pids[1024] = {}, count = 0;
-                        for (int i = 0; i != maxfd; ++i){
+                        for (int i = 4; i != maxfd; ++i){
                             if (openedfd[i])
                                 pids[count++] = pipe2pid[i];
                             // fprintf(stderr, "%d\n", i);
                         }
-                        buflen = snprintf( buf, sizeof(buf), "PIDs of Running Processes:");
-                        add_to_buf( &requestP[conn_fd], buf, buflen );
-                        for (int i = 1; i < count; ++i){
-                            buflen = snprintf( buf, sizeof(buf), "%s %d", (i==1)?"":",", pids[i]);
+                        if (count > 0){
+                            buflen = snprintf( buf, sizeof(buf), "PIDs of Running Processes:");
                             add_to_buf( &requestP[conn_fd], buf, buflen );
-                            // fprintf(stderr, "%d\n", pids[i]);
+                            for (int i = 0; i < count; ++i){
+                                buflen = snprintf( buf, sizeof(buf), "%s %d", (i==0)?"":",", pids[i]);
+                                add_to_buf( &requestP[conn_fd], buf, buflen );
+                                fprintf(stderr, "%d\n", pids[i]);
+                            }
+                        }else{
+                            buflen = snprintf( buf, sizeof(buf), "PIDs of Running Processes: Nothing");
+                            add_to_buf( &requestP[conn_fd], buf, buflen );
                         }
+                        buflen = snprintf( buf, sizeof(buf), "\015\012");
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
                         //
-
+                        int f, i;
+                        // time_t current_time;
+                        char string[500];
+                        Info *p_map;
+                        f = open(logfilenameP, O_RDWR);
+                        p_map = (Info*)mmap(0, sizeof(Info),  PROT_READ,  MAP_SHARED, f, 0);
+                        fprintf(stderr, "%s\n", p_map->string);
+                        close(f);
+                        buflen = snprintf( buf, sizeof(buf), "%s", p_map->string);
+                        // buf[--buflen] = '\0';
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
                         //
 
 
@@ -273,7 +290,8 @@ int main( int argc, char** argv ) {
                             close(from_CGI[conn_fd][0]);
                             // close(STDIN_FILENO);
                             // close(STDOUT_FILENO);
-                            execl(requestP[conn_fd].file, requestP[conn_fd].file, NULL);
+                            fprintf(stderr, "LOGFILE:%s\n", logfilenameP);
+                            execl(requestP[conn_fd].file, requestP[conn_fd].file, logfilenameP, NULL);
                             ++died;
                             exit(3);
                         }
