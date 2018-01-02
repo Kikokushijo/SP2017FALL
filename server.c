@@ -1,3 +1,4 @@
+/* b05902052 劉家維 */
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -288,6 +289,8 @@ int main( int argc, char** argv ) {
                 fprintf( stderr, "BAD REQUEST\n");
                 close( requestP[conn_fd].conn_fd );
                 free_request( &requestP[conn_fd] );
+                close(to_CGI[conn_fd][1]);
+                close(from_CGI[conn_fd][0]);
             }else{
                 char contbuf[20000] = {};
                 int cont_len = read(pipe_fd, contbuf, 19500);
@@ -299,17 +302,18 @@ int main( int argc, char** argv ) {
                 (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
                 buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
-                buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
-                add_to_buf( &requestP[conn_fd], buf, buflen );
                 buflen = snprintf( buf, sizeof(buf), "Content-Length: %d\015\012", cont_len );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
                 buflen = snprintf( buf, sizeof(buf), "%s\015\012\015\012", contbuf );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
                 nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
                 fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
-                // fprintf( stderr, "%s\n", contbuf);
                 close( requestP[conn_fd].conn_fd );
                 free_request( &requestP[conn_fd] );
+                close(to_CGI[conn_fd][1]);
+                close(from_CGI[conn_fd][0]);
             }
 
 

@@ -1,3 +1,4 @@
+/* b05902052 劉家維 */
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -15,6 +16,7 @@ int main(){
         filename[strlen(filename) - 1] = 0;
 
     int fd = open(filename, O_RDONLY);
+    sleep(5);
 
     if(fd < 0){
         char msg[1024] = {};
@@ -38,6 +40,5 @@ int main(){
         if (read_len == 0) break;
         write(STDOUT_FILENO, buffer, strlen(buffer));
     }
-    sleep(5);
     return 0;
 }
