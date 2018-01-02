@@ -103,7 +103,7 @@ int main( int argc, char** argv ) {
 
     int to_CGI[maxfd][2], from_CGI[maxfd][2];
     int openedfd[10000] = {}, pipe2conn[10000] = {}, pipe2pid[10000] = {};
-    openedfd[3] = 1;
+    
 
     time_t now;
 
@@ -117,6 +117,7 @@ int main( int argc, char** argv ) {
 
     // Initialize http server
     init_http_server( &server, (unsigned short) atoi( argv[1] ) );
+    openedfd[server.listen_fd] = 1;
 
     maxfd = getdtablesize();
     requestP = ( http_request* ) malloc( sizeof( http_request ) * maxfd );
@@ -191,6 +192,7 @@ int main( int argc, char** argv ) {
 
                     char buf_query[1024] = {};
                     sscanf(requestP[conn_fd].query, "filename=%s", buf_query);
+                    // fprintf(stderr, "%s\n", buf_query);
                     if (!isvalid_name(requestP[conn_fd].file) || !isvalid_name(buf_query)){
                         buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 400 BAD REQUEST\015\012Server: SP TOY\015\012" );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
@@ -216,20 +218,19 @@ int main( int argc, char** argv ) {
                         if ((pid = fork()) == 0){
                             dup2(to_CGI[conn_fd][0], STDIN_FILENO);
                             dup2(from_CGI[conn_fd][1], STDOUT_FILENO);
-                            // close(to_CGI[conn_fd][1]);
-                            // close(from_CGI[conn_fd][0]);
-                            // close(STDIN_FILENO);
-                            // close(STDOUT_FILENO);
+                            close(to_CGI[conn_fd][1]);
+                            close(from_CGI[conn_fd][0]);
                             execl(requestP[conn_fd].file, requestP[conn_fd].file, NULL);
                             exit(3);
                         }
-                        // close(to_CGI[conn_fd][1]);
-                        // close(from_CGI[conn_fd][0]);
+                        close(to_CGI[conn_fd][0]);
+                        close(from_CGI[conn_fd][1]);
                         int read_pipe = from_CGI[conn_fd][0];
                         openedfd[read_pipe] = 1;
                         pipe2conn[read_pipe] = conn_fd;
                         pipe2pid[read_pipe] = pid;
                         write(to_CGI[conn_fd][1], buf_query, strlen(buf_query));
+                        // fprintf(stderr, "fd:%d WRITTEN:%s\n", to_CGI[conn_fd][1], buf_query);
                         // fprintf(stderr, "PIPING: %d\n", read_pipe);
                         // fprintf(stderr, "Pipe2conn: %d\n", pipe2conn[read_pipe]);
                         // fprintf(stderr, "Pipe2pid: %d\n", pipe2pid[read_pipe]);
@@ -263,6 +264,7 @@ int main( int argc, char** argv ) {
 
             int status;
             pid_t ret = waitpid(pid, &status, WNOHANG);
+            status = WEXITSTATUS(status);
             // fprintf(stderr, "PID:%d STATUS:%d\nRET:%d\n", (int)pid, (int)status, (int)ret);
             if (ret < 0){
                 continue;
