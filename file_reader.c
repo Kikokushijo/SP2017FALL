@@ -9,7 +9,7 @@
 int main(){
     char filename[1024] = {};
     read(STDIN_FILENO, filename, 1024);
-    // fprintf(stderr, "READING:%s\n", filename);
+    fprintf(stderr, "READING:%s\n", filename);
 
     if (filename[strlen(filename) - 1] == '\n')
         filename[strlen(filename) - 1] = 0;
@@ -22,13 +22,13 @@ int main(){
             sprintf(msg, "Permission Denied: %s\n", filename);
             fprintf(stderr, "Permission Denied:%s\n", filename);
             write(STDOUT_FILENO, msg, strlen(msg));
-            return 1;
+            exit(1);
         }
         else if (errno == ENOENT){
             sprintf(msg, "No Such File or Directory: %s\n", filename);
             fprintf(stderr, "No File:%s\n", filename);
             write(STDOUT_FILENO, msg, strlen(msg));
-            return 2;
+            exit(2);
         }
     }
 
@@ -38,5 +38,5 @@ int main(){
         if (read_len == 0) break;
         write(STDOUT_FILENO, buffer, strlen(buffer));
     }
-    return 0;
+    exit(0);
 }

@@ -220,6 +220,8 @@ int main( int argc, char** argv ) {
                             dup2(from_CGI[conn_fd][1], STDOUT_FILENO);
                             close(to_CGI[conn_fd][1]);
                             close(from_CGI[conn_fd][0]);
+                            // close(STDIN_FILENO);
+                            // close(STDOUT_FILENO);
                             execl(requestP[conn_fd].file, requestP[conn_fd].file, NULL);
                             exit(3);
                         }
@@ -263,10 +265,10 @@ int main( int argc, char** argv ) {
 
 
             int status;
-            pid_t ret = waitpid(pid, &status, WNOHANG);
+            pid_t ret = waitpid(pid, &status, 0);
             status = WEXITSTATUS(status);
-            // fprintf(stderr, "PID:%d STATUS:%d\nRET:%d\n", (int)pid, (int)status, (int)ret);
-            if (ret < 0){
+            fprintf(stderr, "PID:%d STATUS:%d\nRET:%d\n", (int)pid, (int)status, (int)ret);
+            if (ret <= 0){
                 continue;
             }
             if (status > 0){
