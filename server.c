@@ -96,6 +96,33 @@ int isvalid_name(char* str){
     return 1;
 }
 
+void mmap_init(const char* map){
+    int fd, i;
+    time_t current_time;
+    char string[500];
+    Info *p_map;
+    // const char *file = "time_test";
+    
+    fd = open(map, O_RDWR | O_TRUNC | O_CREAT, 0777); 
+    if(fd < 0){
+        perror("open");
+        exit(-1);
+    }
+    lseek(fd, sizeof(Info), SEEK_SET);
+    write(fd, "", 1);
+
+    p_map = (Info*) mmap(0, sizeof(Info), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    fprintf(stderr, "mmap address:%#x\n",(unsigned int)&p_map); // 0x00000
+    close(fd);
+
+    snprintf(string, sizeof(string), "Last Exit CGI: -, Filename: -");
+    memcpy(p_map->string, &string , sizeof(string));
+    
+    fprintf(stderr, "initialize over\n ");
+    munmap(p_map, sizeof(Info));
+    return;
+}
+
 int main( int argc, char** argv ) {
     http_server server;         // http server
     http_request* requestP = NULL;// pointer to http requests from client
@@ -119,7 +146,6 @@ int main( int argc, char** argv ) {
 
     time_t now;
 
-
     // Parse args. 
     if ( argc != 3 ) {
         (void) fprintf( stderr, "usage:  %s port# logfile\n", argv[0] );
@@ -127,6 +153,7 @@ int main( int argc, char** argv ) {
     }
 
     logfilenameP = argv[2];
+    mmap_init(logfilenameP);
 
     // Initialize http server
     init_http_server( &server, (unsigned short) atoi( argv[1] ) );

@@ -5,3 +5,4 @@ all: server.c
 clean:
 	rm -rf server
 	rm -rf file_reader
+	rm -rf file_reader2

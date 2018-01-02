@@ -54,6 +54,8 @@ int main(int argc, char **argv){
     if (filename[strlen(filename) - 1] == '\n')
         filename[strlen(filename) - 1] = 0;
 
+    
+
     int fd = open(filename, O_RDONLY);
 
     if(fd < 0){
@@ -71,7 +73,7 @@ int main(int argc, char **argv){
             exit(2);
         }
     }
-
+    mmap_write(argv[1], filename);
     for (;;){
         char buffer[1024] = {};
         int read_len = read(fd, buffer, 1020);
@@ -79,6 +81,5 @@ int main(int argc, char **argv){
         write(STDOUT_FILENO, buffer, strlen(buffer));
     }
     fprintf(stderr, "%s\n", argv[1]);
-    mmap_write(argv[1], filename);
     exit(0);
 }
