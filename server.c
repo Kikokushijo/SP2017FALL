@@ -243,6 +243,7 @@ int main( int argc, char** argv ) {
                         }
                         while(!info_flag);
                         // fprintf(stderr, "INFO START %d\n", died);
+                        requestP[conn_fd].buf_len = 0;
                         buflen = snprintf( buf, sizeof(buf), "%d processes died previously.\015\012", died );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
                         int pids[1024] = {}, count = 0;
@@ -278,9 +279,26 @@ int main( int argc, char** argv ) {
                         // buf[--buflen] = '\0';
                         add_to_buf( &requestP[conn_fd], buf, buflen );
                         //
+                        char tmp[3000] = {};
+                        strcpy(tmp, requestP[conn_fd].buf);
 
-
-
+                        requestP[conn_fd].buf_len = 0;
+                        buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 200 OK\015\012Server: SP TOY\015\012" );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        now = time( (time_t*) 0 );
+                        (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+                        buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        buflen = snprintf( buf, sizeof(buf), "Content-Length: %d\015\012", strlen(tmp) );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        buflen = snprintf( buf, sizeof(buf), "%s\015\012\015\012", tmp );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                        fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                        close( requestP[conn_fd].conn_fd );
+                        free_request( &requestP[conn_fd] );
 
                         nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
                         close( requestP[conn_fd].conn_fd );
@@ -288,6 +306,7 @@ int main( int argc, char** argv ) {
                         ++died;
                         info_flag = 0;
                     }else if (!isvalid_name(requestP[conn_fd].file) || !isvalid_name(buf_query)){
+                        requestP[conn_fd].buf_len = 0;
                         buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 400 BAD REQUEST\015\012Server: SP TOY\015\012" );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
                         now = time( (time_t*) 0 );
