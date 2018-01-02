@@ -53,5 +53,5 @@ dkms.conf
 
 # Homework execute file
 server
-file_reader
+file_reader*
 *.txt

@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <signal.h>
 
 #include <time.h>
 #include <fcntl.h>
@@ -43,8 +44,12 @@ typedef struct {
     size_t buf_idx;             // offset for reading and writing
 } http_request;
 
-static char* logfilenameP;      // log file name
+typedef struct {
+    char c_time_string[100];
+} TimeInfo;
 
+static char* logfilenameP;      // log file name
+int info_flag = 0;
 
 // Forwards
 //
@@ -75,6 +80,12 @@ static void set_ndelay( int fd );
 
 static void add_to_buf( http_request *reqP, char* str, size_t len );
 
+void info_handler(int signo){
+    fprintf(stderr, "INFO!!!\n");
+    info_flag = 1;
+    return;
+}
+
 int isvalid_name(char* str){
     int len = strlen(str);
     if (len == 0) return 0;
@@ -104,9 +115,10 @@ int main( int argc, char** argv ) {
 
     int to_CGI[maxfd][2], from_CGI[maxfd][2];
     int openedfd[10000] = {}, pipe2conn[10000] = {}, pipe2pid[10000] = {};
-    
+    int running = 0, died = 0;    
 
     time_t now;
+
 
     // Parse args. 
     if ( argc != 3 ) {
@@ -132,7 +144,7 @@ int main( int argc, char** argv ) {
     requestP[ server.listen_fd ].status = READING;
 
     fprintf( stderr, "\nstarting on %.80s, port %d, fd %d, maxconn %d, logfile %s...\n", server.hostname, server.port, server.listen_fd, maxfd, logfilenameP );
-
+    signal(SIGUSR1, info_handler);
     // Main loop. 
     while (1) {
 
@@ -193,25 +205,37 @@ int main( int argc, char** argv ) {
 
                     char buf_query[1024] = {};
                     sscanf(requestP[conn_fd].query, "filename=%s", buf_query);
-                    // fprintf(stderr, "%s\n", buf_query);
-                    if (!isvalid_name(requestP[conn_fd].file) || !isvalid_name(buf_query)){
+                    if (strcmp(requestP[conn_fd].file, "info") == 0 && strlen(buf_query) < 5) {
+                        fprintf(stderr, "INFO\n");
+                        if (fork() == 0) {
+                            // fprintf(stderr, "INFO\n");
+                            // signal(SIGUSR1, infoHandler);
+                            kill(getppid(), SIGUSR1);
+                            ++died;
+                            exit(0);
+                        }
+                        while(!info_flag);
+                        fprintf(stderr, "INFO START\n");
+
+                    }else if (!isvalid_name(requestP[conn_fd].file) || !isvalid_name(buf_query)){
                         buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 400 BAD REQUEST\015\012Server: SP TOY\015\012" );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
                         now = time( (time_t*) 0 );
                         (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
                         buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
+                        buflen = snprintf( buf, sizeof(buf), "Content-Length: 28\015\012");
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
                         buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
-                        buflen = snprintf( buf, sizeof(buf), "400 BAD REQUEST\015\012\015\012" );
+                        buflen = snprintf( buf, sizeof(buf), "400 INVALID REQUEST FILENAME\015\012\015\012" );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
                         nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
                         fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
                         fprintf( stderr, "BAD REQUEST\n");
                         close( requestP[conn_fd].conn_fd );
                         free_request( &requestP[conn_fd] );
-                    }
-                    else{
+                    }else{
                         pipe(to_CGI[conn_fd]);
                         pipe(from_CGI[conn_fd]);
                         pid_t pid;
@@ -224,6 +248,7 @@ int main( int argc, char** argv ) {
                             // close(STDIN_FILENO);
                             // close(STDOUT_FILENO);
                             execl(requestP[conn_fd].file, requestP[conn_fd].file, NULL);
+                            ++died;
                             exit(3);
                         }
                         close(to_CGI[conn_fd][0]);
@@ -272,7 +297,7 @@ int main( int argc, char** argv ) {
             if (ret <= 0){
                 continue;
             }
-            if (status > 0){
+            if (status == 3){
                 requestP[conn_fd].buf_len = 0;
                 buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 404 NOT FOUND\015\012Server: SP TOY\015\012" );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
@@ -280,9 +305,11 @@ int main( int argc, char** argv ) {
                 (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
                 buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Content-Length: 25\015\012");
+                add_to_buf( &requestP[conn_fd], buf, buflen );
                 buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
-                buflen = snprintf( buf, sizeof(buf), "404 NOT FOUND\015\012\015\012" );
+                buflen = snprintf( buf, sizeof(buf), "404 CGI PROGRAM NOT FOUND\015\012\015\012" );
                 add_to_buf( &requestP[conn_fd], buf, buflen );
                 nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
                 fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
@@ -291,6 +318,51 @@ int main( int argc, char** argv ) {
                 free_request( &requestP[conn_fd] );
                 close(to_CGI[conn_fd][1]);
                 close(from_CGI[conn_fd][0]);
+                ++died;
+            }if (status == 2){
+                requestP[conn_fd].buf_len = 0;
+                buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 404 NOT FOUND\015\012Server: SP TOY\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                now = time( (time_t*) 0 );
+                (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+                buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Content-Length: 18\015\012");
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "404 FILE NOT FOUND\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                fprintf( stderr, "BAD REQUEST\n");
+                close( requestP[conn_fd].conn_fd );
+                free_request( &requestP[conn_fd] );
+                close(to_CGI[conn_fd][1]);
+                close(from_CGI[conn_fd][0]);
+                ++died;
+            }if (status == 1){
+                requestP[conn_fd].buf_len = 0;
+                buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 404 NOT FOUND\015\012Server: SP TOY\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                now = time( (time_t*) 0 );
+                (void) strftime( timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime( &now ) );
+                buflen = snprintf( buf, sizeof(buf), "Date: %s\015\012", timebuf );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Content-Length: 21\015\012");
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "Connection: close\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                buflen = snprintf( buf, sizeof(buf), "404 PERMISSION DENIED\015\012\015\012" );
+                add_to_buf( &requestP[conn_fd], buf, buflen );
+                nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                fprintf( stderr, "complete writing %d bytes on fd %d\n", nwritten, requestP[conn_fd].conn_fd );
+                fprintf( stderr, "BAD REQUEST\n");
+                close( requestP[conn_fd].conn_fd );
+                free_request( &requestP[conn_fd] );
+                close(to_CGI[conn_fd][1]);
+                close(from_CGI[conn_fd][0]);
+                ++died;
             }else{
                 char contbuf[20000] = {};
                 int cont_len = read(pipe_fd, contbuf, 19500);
@@ -314,6 +386,7 @@ int main( int argc, char** argv ) {
                 free_request( &requestP[conn_fd] );
                 close(to_CGI[conn_fd][1]);
                 close(from_CGI[conn_fd][0]);
+                ++died;
             }
 
 
