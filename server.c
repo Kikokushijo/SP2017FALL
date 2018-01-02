@@ -215,8 +215,34 @@ int main( int argc, char** argv ) {
                             exit(0);
                         }
                         while(!info_flag);
-                        fprintf(stderr, "INFO START\n");
+                        fprintf(stderr, "INFO START %d\n", died);
+                        buflen = snprintf( buf, sizeof(buf), "%d processes died previously.\015\012", died );
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        int pids[1024] = {}, count = 0;
+                        for (int i = 0; i != maxfd; ++i){
+                            if (openedfd[i])
+                                pids[count++] = pipe2pid[i];
+                            // fprintf(stderr, "%d\n", i);
+                        }
+                        buflen = snprintf( buf, sizeof(buf), "PIDs of Running Processes:");
+                        add_to_buf( &requestP[conn_fd], buf, buflen );
+                        for (int i = 1; i < count; ++i){
+                            buflen = snprintf( buf, sizeof(buf), "%s %d", (i==1)?"":",", pids[i]);
+                            add_to_buf( &requestP[conn_fd], buf, buflen );
+                            // fprintf(stderr, "%d\n", pids[i]);
+                        }
+                        //
 
+                        //
+
+
+
+
+                        nwritten = send( requestP[conn_fd].conn_fd, requestP[conn_fd].buf, requestP[conn_fd].buf_len, 0 );
+                        close( requestP[conn_fd].conn_fd );
+                        free_request( &requestP[conn_fd] );
+                        ++died;
+                        info_flag = 0;
                     }else if (!isvalid_name(requestP[conn_fd].file) || !isvalid_name(buf_query)){
                         buflen = snprintf( buf, sizeof(buf), "HTTP/1.1 400 BAD REQUEST\015\012Server: SP TOY\015\012" );
                         add_to_buf( &requestP[conn_fd], buf, buflen );
