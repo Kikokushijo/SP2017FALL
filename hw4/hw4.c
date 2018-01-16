@@ -3,12 +3,15 @@
 #include <assert.h>
 #include <math.h>
 #include <string.h>
+#include <pthread.h>
+#include <stdint.h>
 
 #define TESTSIZE 25008
 #define DATASIZE 25150
 #define BATCHSIZE 2048
 #define FEATSIZE 33
 #define CHARBUFFERSIZE 150
+#define MAXTREENUM 10000
 
 typedef struct node Node;
 typedef struct info Info;
@@ -31,6 +34,7 @@ struct idx_ft{
 double X[DATASIZE][FEATSIZE], Xt[TESTSIZE][FEATSIZE];
 int Y[DATASIZE];
 int TREENUM = 100, THREADNUM = 2;
+Node* forest[MAXTREENUM];
 
 int cmp_feat(const void *a, const void *b){
     int feat = ((IdxFt*)a)->ftidx;
@@ -143,6 +147,13 @@ Node* build(){
     return root;
 }
 
+void thread(void *id){
+    intptr_t tid = (intptr_t) id;
+    for (int i = tid; i < TREENUM; i += THREADNUM)
+        forest[i] = build();
+    return;
+}
+
 int main(int argc, char **argv){
 
     // argparser
@@ -165,7 +176,7 @@ int main(int argc, char **argv){
     assert(strcmp("-thread", argv[7]) == 0);
     THREADNUM = atoi(argv[8]);
 
-    srand(7122);
+    srand(0);
 
     // read training data
     FILE* train = fopen(train_name, "r");
@@ -178,9 +189,20 @@ int main(int argc, char **argv){
     fclose(train);
 
     // build random forest
-    Node* forest[TREENUM];
-    for (int i = 0; i != TREENUM; ++i)
-        forest[i] = build();
+    // for (int i = 0; i != TREENUM; ++i)
+    //     forest[i] = build();
+
+    pthread_t id[THREADNUM];
+    for (intptr_t i = 0; i != THREADNUM; ++i){
+        int ret = pthread_create(id+i, NULL,(void *) thread, (void *)i);
+        if(ret != 0){
+            printf ("Create pthread error!n");
+            exit (1);
+        }
+    }
+
+    for (int i = 0; i != THREADNUM; ++i)
+        pthread_join(id[i], NULL);
 
     // read testing data
     FILE* test = fopen(test_name, "r");

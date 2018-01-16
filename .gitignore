@@ -56,3 +56,8 @@ server
 file_reader*
 *.txt
 sample.log*
+
+# hw4
+test.sh
+submission.csv
+hw4/hw4
