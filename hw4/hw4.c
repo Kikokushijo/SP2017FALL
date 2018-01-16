@@ -2,14 +2,13 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <math.h>
-#include <time.h>
 #include <string.h>
-// #define DATASIZE 20000
+
 #define TESTSIZE 25008
 #define DATASIZE 25150
-#define BATCHSIZE 1024
+#define BATCHSIZE 2048
 #define FEATSIZE 33
-#define TREENUM 10000
+#define CHARBUFFERSIZE 150
 
 typedef struct node Node;
 typedef struct info Info;
@@ -31,14 +30,14 @@ struct idx_ft{
 
 double X[DATASIZE][FEATSIZE], Xt[TESTSIZE][FEATSIZE];
 int Y[DATASIZE];
-int zeros, ones;
+int TREENUM = 100, THREADNUM = 2;
 
 int cmp_feat(const void *a, const void *b){
     int feat = ((IdxFt*)a)->ftidx;
     int ida = ((IdxFt*)a)->idx;
     int idb = ((IdxFt*)b)->idx;
-    if (X[ida][feat] > X[idb][feat] + 1e-6) return  1;
-    if (X[ida][feat] < X[idb][feat] - 1e-6) return -1;
+    if (X[ida][feat] > X[idb][feat]) return  1;
+    if (X[ida][feat] < X[idb][feat]) return -1;
     return 0;
 }
 
@@ -50,10 +49,6 @@ Node* newNode(void){
 
 Node* split(IdxFt* indices, int size, Info parent){
 
-    // for (int i = 0; i != size; ++i)
-    //     fprintf(stderr, "%d%c", indices[i].idx, " \n"[i==size-1]);
-    // fprintf(stderr, "zero: %d, one: %d\n", parent.label[0], parent.label[1]);
-    // fprintf(stderr, "%d\n", size);
     assert(size != 0);
     if (size == 0) return NULL;
 
@@ -66,8 +61,6 @@ Node* split(IdxFt* indices, int size, Info parent){
         root->threshold = (parent.label[0] == 0)? 1.0f:0.0f;
         return root;
     }
-
-    // fprintf(stderr, "PASS\n");
 
     IdxFt ary[size], tmpary[size];
     for (int i = 0; i != size; ++i)
@@ -90,7 +83,6 @@ Node* split(IdxFt* indices, int size, Info parent){
             int curr_loss = (left_feat.label[0] * left_feat.label[1]) + 
                             ((parent.label[0] - left_feat.label[0]) *
                              (parent.label[1] - left_feat.label[1]));
-            // if (curr_loss < feat_loss && X[ary[j+1].idx][i] - X[ary[j].idx][i] > 1e-7){
             if (curr_loss < feat_loss){
                 slice = j + 1;
                 rcd = left_feat;
@@ -107,13 +99,6 @@ Node* split(IdxFt* indices, int size, Info parent){
         }
     }
 
-    // fprintf(stderr, "PASS2\n");
-    // for (int i = 0; i != size; ++i){
-    //     fprintf(stderr, "%d%c", ary[i].idx, " \n"[i==size-1]);
-    // }
-
-
-    // fprintf(stderr, "slice: %d\n", all_feat_slice);
     Info left = {}, right = {};
     for (int i = 0; i != all_feat_slice; ++i)
         left.label[Y[tmpary[i].idx]]++;
@@ -121,39 +106,22 @@ Node* split(IdxFt* indices, int size, Info parent){
     for (int i = all_feat_slice; i != size; ++i)
         right.label[Y[tmpary[i].idx]]++;
 
-    // fprintf(stderr, "PASS3\n");
 
     assert(left.label[0] + right.label[0] == parent.label[0]);
     assert(left.label[1] + right.label[1] == parent.label[1]);
     assert(left.label[0] == arcd.label[0]);
     assert(left.label[1] == arcd.label[1]);
 
-    // fprintf(stderr, "PASS4\n");
-
-    // puts("PASS2!");
-    // printf("%d %lf\n", best_feat, (X[all_feat_slice][best_feat] + X[all_feat_slice+1][best_feat]) / 2);
     root->feat = best_feat;
     root->threshold = (X[tmpary[all_feat_slice-1].idx][best_feat] + X[tmpary[all_feat_slice].idx][best_feat]) / 2;
-    // fprintf(stderr, "%d %lf\n", root->feat, root->threshold);
-    // for (int i = 0; i != size; ++i)
-    //     fprintf(stderr, "%d %f\n", tmpary[i].idx, X[tmpary[i].idx][best_feat]);
 
-    // puts("PASS3!");
-    // fprintf(stderr, "Slice: %d ", all_feat_slice);
-    // fprintf(stderr, "RECORD: LEFT: %d %d RIGHT: %d %d\n", arcd.label[0], arcd.label[1], 
-    //                                              parent.label[0] - arcd.label[0],
-    //                                              parent.label[1] - arcd.label[1]);
-
-    // fprintf(stderr, "%d->%d, %d\n", size, all_feat_slice, size-all_feat_slice);
     root->left = split(tmpary, all_feat_slice, left);
     root->right = split(tmpary+all_feat_slice, size-all_feat_slice, right);
     return root;
 }
 
 int predict(Node* root, double* xt){
-    // fprintf(stderr, "Start predict... \n");
     while(root->feat != -1){
-        // fprintf(stderr, "FEATID:%d THRESHOLD:%f FEATV:%f\n", root->feat, root->threshold, xt[root->feat]);
         if (xt[root->feat] > root->threshold + 1e-7)
             root = root->right;
         else
@@ -163,6 +131,7 @@ int predict(Node* root, double* xt){
 }
 
 Node* build(){
+
     IdxFt indices[BATCHSIZE] = {};
     Info parent = {};
     for (int i = 0; i != BATCHSIZE; ++i){
@@ -171,41 +140,50 @@ Node* build(){
     }
     Node* root = split(indices, BATCHSIZE, parent);
 
-    for (int i = 0; i != BATCHSIZE; ++i){
-        int res = predict(root, X[indices[i].idx]);
-        // fprintf(stderr, "%d %d %d\n", indices[i].idx, res, Y[indices[i].idx]);
-        // assert(res == Y[indices[i].idx]);
-    }
-
     return root;
 }
 
+int main(int argc, char **argv){
 
+    // argparser
+    char data_dir[CHARBUFFERSIZE] = {};
+    char train_name[CHARBUFFERSIZE] = {};
+    char test_name[CHARBUFFERSIZE] = {};
+    char output_name[CHARBUFFERSIZE] = {};
 
-int main(){
+    assert(strcmp("-data", argv[1]) == 0);
+    strcpy(data_dir, argv[2]);
+    sprintf(train_name, "%s/training_data", data_dir);
+    sprintf(test_name, "%s/testing_data", data_dir);
+
+    assert(strcmp("-output", argv[3]) == 0);
+    strcpy(output_name, argv[4]);
+
+    assert(strcmp("-tree", argv[5]) == 0);
+    TREENUM = atoi(argv[6]);
+
+    assert(strcmp("-thread", argv[7]) == 0);
+    THREADNUM = atoi(argv[8]);
 
     srand(7122);
-    FILE* train = fopen("../data/training_data", "r");
-    Info parent = {};
+
+    // read training data
+    FILE* train = fopen(train_name, "r");
     for (int i = 0; i != DATASIZE; ++i){
         int _; fscanf(train, "%d", &_);
         for (int j = 0; j != FEATSIZE; ++j)
             fscanf(train, "%lf", &X[i][j]);
         fscanf(train, "%d", &Y[i]);
-        parent.label[Y[i]]++;
     }
     fclose(train);
 
-    zeros = parent.label[0], ones = parent.label[1];
-
-    Node* forest[TREENUM] = {};
-    for (int i = 0; i != TREENUM; ++i){
-        fprintf(stderr, "TREEID: %d\n", i);
+    // build random forest
+    Node* forest[TREENUM];
+    for (int i = 0; i != TREENUM; ++i)
         forest[i] = build();
-    }
 
-
-    FILE* test = fopen("../data/testing_data", "r");
+    // read testing data
+    FILE* test = fopen(test_name, "r");
     for (int i = 0; i != TESTSIZE; ++i){
         int _; fscanf(test, "%d", &_);
         for (int j = 0; j != FEATSIZE; ++j)
@@ -213,16 +191,19 @@ int main(){
     }
     fclose(test);
 
-    puts("id,label");
+    // write output data
+    FILE* output = fopen(output_name, "w+");
+    fprintf(output, "id,label\n");
     for (int i = 0; i != TESTSIZE; ++i){
         double res = 0;
-        for (int t = 0; t != TREENUM; ++t){
+        for (int t = 0; t != TREENUM; ++t)
             res += predict(forest[t], Xt[i]);
-        }
         if (res / TREENUM > 0.5f)
-            printf("%d,1\n", i);
+            fprintf(output, "%d,1\n", i);
         else
-            printf("%d,0\n", i);
+            fprintf(output, "%d,0\n", i);
     }
+    fclose(output);
+
     return 0;
 }
