@@ -3,4 +3,4 @@ all: hw4.c
 clean:
 	rm -rf hw4
 run:
-	./hw4 -data ../data -output submission.csv -tree 1000 -thread 10
+	./hw4 -data ../data -output submission.csv -tree 1000 -thread 2

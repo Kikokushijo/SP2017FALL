@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -37,7 +36,6 @@ int Y[DATASIZE];
 int TREENUM = 100, THREADNUM = 2;
 Node* forest[MAXTREENUM];
 
-// int cmp_feat(const void *a, const void *b, void *c){
 int cmp_feat(const void *a, const void *b){
     int feat = ((IdxFt*)a)->ftidx;
     int ida = ((IdxFt*)a)->idx;
@@ -81,7 +79,6 @@ Node* split(IdxFt* indices, int size, Info parent){
             ary[j].ftidx = i;
 
         qsort(ary, size, sizeof(IdxFt), cmp_feat);
-        // qsort_r(ary, size, sizeof(IdxFt), cmp_feat, NULL);
 
         Info left_feat = {}, rcd = {};
         int feat_loss = 2147483647, slice;
@@ -143,7 +140,6 @@ Node* build(){
     Info parent = {};
     for (int i = 0; i != BATCHSIZE; ++i){
         indices[i].idx = rand() % DATASIZE;
-        // indices[i].idx = rand_r(0) % DATASIZE;
         parent.label[Y[indices[i].idx]]++;
     }
     Node* root = split(indices, BATCHSIZE, parent);
